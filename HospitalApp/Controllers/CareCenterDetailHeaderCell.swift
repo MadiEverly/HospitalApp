@@ -6,6 +6,7 @@
 //
 
 import UIKit
+import MapKit
 
 class CareCenterDetailHeaderCell: UITableViewCell {
     
@@ -13,14 +14,17 @@ class CareCenterDetailHeaderCell: UITableViewCell {
     private let nameLabel = UILabel()
     private let addressIconView = UIImageView()
     private let addressLabel = UILabel()
+    private let travelTimeLabel = UILabel()
     private let capabilitiesLabel = UILabel()
     private let typeLabel = UILabel()
     private let hoursLabel = UILabel()
     private let phoneLabel = UILabel()
     private let emailLabel = UILabel()
+    private let mapsButton = UIButton(type: .system)
     
     // MARK: - Properties
     static let reuseIdentifier = "CareCenterDetailHeaderCell"
+    private var careCenter: CareCenter?
     
     // MARK: - Initialization
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -56,7 +60,36 @@ class CareCenterDetailHeaderCell: UITableViewCell {
         addressLabel.font = UIFont.systemFont(ofSize: 15)
         addressLabel.textColor = .secondaryLabel
         addressLabel.numberOfLines = 0
+        addressLabel.lineBreakMode = .byWordWrapping
+        // Let the label yield horizontally so the button doesn't get squished
+        addressLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        addressLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         contentView.addSubview(addressLabel)
+        
+        // Configure maps button
+        mapsButton.translatesAutoresizingMaskIntoConstraints = false
+        var config = UIButton.Configuration.filled()
+        config.baseBackgroundColor = .systemBlue
+        config.baseForegroundColor = .white
+        config.cornerStyle = .capsule
+        config.title = "Open in Maps"
+        config.image = UIImage(systemName: "arrow.triangle.turn.up.right.diamond")
+        config.imagePadding = 6
+        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
+        mapsButton.configuration = config
+        // Make the button keep its intrinsic width
+        mapsButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        mapsButton.setContentHuggingPriority(.required, for: .horizontal)
+        mapsButton.addTarget(self, action: #selector(openInMapsTapped), for: .touchUpInside)
+        contentView.addSubview(mapsButton)
+        
+        // Travel time label
+        travelTimeLabel.translatesAutoresizingMaskIntoConstraints = false
+        travelTimeLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
+        travelTimeLabel.textColor = .secondaryLabel
+        travelTimeLabel.numberOfLines = 1
+        travelTimeLabel.isHidden = true
+        contentView.addSubview(travelTimeLabel)
         
         // Configure capabilities label
         capabilitiesLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -95,7 +128,7 @@ class CareCenterDetailHeaderCell: UITableViewCell {
         
         // Layout constraints
         NSLayoutConstraint.activate([
-            // Name label - top (leave space for close button: 40pt button + 12pt margin + 8pt padding = 60pt)
+            // Name label - top
             nameLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
             nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
             nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -68),
@@ -106,13 +139,22 @@ class CareCenterDetailHeaderCell: UITableViewCell {
             addressIconView.widthAnchor.constraint(equalToConstant: 18),
             addressIconView.heightAnchor.constraint(equalToConstant: 18),
             
-            // Address label - next to icon
+            // Maps button aligned with address row on the right
+            mapsButton.centerYAnchor.constraint(equalTo: addressIconView.centerYAnchor),
+            mapsButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            
+            // Address label - next to icon, before maps button
             addressLabel.centerYAnchor.constraint(equalTo: addressIconView.centerYAnchor),
             addressLabel.leadingAnchor.constraint(equalTo: addressIconView.trailingAnchor, constant: 10),
-            addressLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            addressLabel.trailingAnchor.constraint(lessThanOrEqualTo: mapsButton.leadingAnchor, constant: -10),
             
-            // Capabilities label - below address
-            capabilitiesLabel.topAnchor.constraint(equalTo: addressLabel.bottomAnchor, constant: 14),
+            // Travel time label - below address
+            travelTimeLabel.topAnchor.constraint(equalTo: addressLabel.bottomAnchor, constant: 8),
+            travelTimeLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            travelTimeLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -20),
+            
+            // Capabilities label - below travel time
+            capabilitiesLabel.topAnchor.constraint(equalTo: travelTimeLabel.bottomAnchor, constant: 14),
             capabilitiesLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
             capabilitiesLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
             
@@ -141,11 +183,17 @@ class CareCenterDetailHeaderCell: UITableViewCell {
     
     // MARK: - Configuration
     func configure(with careCenter: CareCenter) {
+        self.careCenter = careCenter
+        
         // Set name
         nameLabel.text = careCenter.name
         
         // Set address
         addressLabel.text = careCenter.fullAddress
+        
+        // Reset travel time (will be set by controller)
+        travelTimeLabel.text = nil
+        travelTimeLabel.isHidden = true
         
         // Set capabilities (show all)
         let capabilitiesText = formatCapabilities(careCenter.capabilities)
@@ -190,6 +238,33 @@ class CareCenterDetailHeaderCell: UITableViewCell {
         }
     }
     
+    func setTravelTime(seconds: Int) {
+        let minutes = max(1, Int(round(Double(seconds) / 60.0)))
+        travelTimeLabel.text = "\(minutes) min drive"
+        travelTimeLabel.isHidden = false
+    }
+    
+    @objc private func openInMapsTapped() {
+        guard let center = careCenter else { return }
+        openInGoogleMapsOrAppleMaps(name: center.name, latitude: center.latitude, longitude: center.longitude)
+    }
+    
+    private func openInGoogleMapsOrAppleMaps(name: String, latitude: Double, longitude: Double) {
+        let lat = latitude
+        let lon = longitude
+        
+        if let gmURL = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=driving"),
+           UIApplication.shared.canOpenURL(gmURL) {
+            UIApplication.shared.open(gmURL, options: [:], completionHandler: nil)
+            return
+        }
+        
+        // Fallback to Apple Maps
+        let destination = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+        destination.name = name
+        destination.openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving])
+    }
+    
     private func formatCapabilities(_ capabilities: [Capability]) -> String {
         let capabilityNames = capabilities.map { $0.name }
         return capabilityNames.joined(separator: " • ")
@@ -230,6 +305,8 @@ class CareCenterDetailHeaderCell: UITableViewCell {
         super.prepareForReuse()
         nameLabel.text = nil
         addressLabel.text = nil
+        travelTimeLabel.text = nil
+        travelTimeLabel.isHidden = true
         capabilitiesLabel.text = nil
         typeLabel.text = nil
         hoursLabel.text = nil
@@ -241,5 +318,7 @@ class CareCenterDetailHeaderCell: UITableViewCell {
         hoursLabel.isHidden = false
         phoneLabel.isHidden = false
         emailLabel.isHidden = false
+        careCenter = nil
     }
 }
+

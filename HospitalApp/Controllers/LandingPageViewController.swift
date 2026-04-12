@@ -30,6 +30,10 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // Remove any navigation title text
+        navigationItem.title = nil
+        title = nil
+
         // Do any additional setup after loading the view.
         // From within a UIViewController (e.g., LandingPageViewController)
         
@@ -52,6 +56,18 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
             // Refresh capability buttons when care centers change (new capabilities may be added)
             self?.refreshCapabilityButtons()
         }
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Hide the navigation bar so the safe area top is directly under the status bar/Dynamic Island
+        navigationController?.setNavigationBarHidden(true, animated: false)
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        // Restore for other screens
+        navigationController?.setNavigationBarHidden(false, animated: false)
     }
     
     @objc private func handleMapTap() {
@@ -81,8 +97,9 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
         guard presentedViewController == nil else { return }
 
         let storyboard = UIStoryboard(name: "Main", bundle: nil)
+        // Updated to instantiate CareCentersListViewController
         guard let careCentersVC = storyboard.instantiateViewController(withIdentifier: "CareCenterList") as? CareCenterListViewController else {
-            assertionFailure("Failed to instantiate CareCenterListViewController.")
+            assertionFailure("Failed to instantiate CareCenterListViewController. Check storyboard ID and class.")
             return
         }
 
@@ -166,7 +183,7 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
 
         // Layout constraints: positioned next to recenter button
         NSLayoutConstraint.activate([
-            searchTextField.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            searchTextField.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 0),
             searchTextField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             searchTextField.trailingAnchor.constraint(equalTo: recenterButton.leadingAnchor, constant: -8),
             searchTextField.heightAnchor.constraint(equalToConstant: 44)
@@ -348,7 +365,7 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
             recenterButton.widthAnchor.constraint(equalToConstant: 44),
             recenterButton.heightAnchor.constraint(equalToConstant: 44),
             recenterButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            recenterButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12)
+            recenterButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 0)
         ])
         view.bringSubviewToFront(recenterButton)
     }
@@ -370,7 +387,7 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
         
         // Layout constraints
         NSLayoutConstraint.activate([
-            capabilityScrollView.topAnchor.constraint(equalTo: searchTextField.bottomAnchor, constant: 8),
+            capabilityScrollView.topAnchor.constraint(equalTo: searchTextField.bottomAnchor, constant: 4),
             capabilityScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             capabilityScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             capabilityScrollView.heightAnchor.constraint(equalToConstant: 36),
@@ -398,7 +415,7 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
             view.removeFromSuperview()
         }
         
-        // Get all capabilities and create buttons
+        // Get all capabilities and create buttons (already deduped by name in DataManager)
         let capabilities = DataManager.shared.getAllCapabilities()
         
         guard !capabilities.isEmpty else {
@@ -433,26 +450,19 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
         button.layer.shadowOffset = CGSize(width: 0, height: 2)
         button.layer.shadowRadius = 4
         
-        // Store capability in button tag (we'll use this to identify which capability was tapped)
-        button.accessibilityIdentifier = capability.id.uuidString
+        // Use title for identification; avoid relying on UUIDs that may differ across centers
         button.addTarget(self, action: #selector(capabilityButtonTapped(_:)), for: .touchUpInside)
         
         return button
     }
     
     @objc private func capabilityButtonTapped(_ sender: UIButton) {
-        guard let capabilityID = sender.accessibilityIdentifier,
-              let uuid = UUID(uuidString: capabilityID) else {
+        // Use the button title (capability name) instead of UUID to avoid duplicates created server-side
+        guard let name = sender.title(for: .normal), !name.isEmpty else {
             return
         }
-        
-        // Find the capability
-        let capabilities = DataManager.shared.getAllCapabilities()
-        guard let capability = capabilities.first(where: { $0.id == uuid }) else {
-            return
-        }
-        
-        selectedCapability = capability
+        // Create a transient Capability with this name; filtering will be name-based
+        selectedCapability = Capability(name: name)
         presentCareCentersSheetWithFilter()
     }
     
@@ -461,8 +471,9 @@ class LandingPageViewController: UIViewController, CLLocationManagerDelegate {
         guard presentedViewController == nil else { return }
 
         let storyboard = UIStoryboard(name: "Main", bundle: nil)
+        // Updated to instantiate CareCentersListViewController
         guard let careCentersVC = storyboard.instantiateViewController(withIdentifier: "CareCenterList") as? CareCenterListViewController else {
-            assertionFailure("Failed to instantiate CareCenterListViewController.")
+            assertionFailure("Failed to instantiate CareCenterListViewController. Check storyboard ID and class.")
             return
         }
 

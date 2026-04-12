@@ -8,8 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		263DF4C95E5BC2AB02F77C0B /* Pods_HospitalApp.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B84F42C2C782624660F28218 /* Pods_HospitalApp.framework */; };
-		CA69F3842F2A87D70059BC8A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CA69F37B2F2A87D70059BC8A /* Assets.xcassets */; };
-		CA69F3862F2A87D70059BC8A /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = CA69F37E2F2A87D70059BC8A /* LaunchScreen.storyboard */; };
+		842EF2332F78555900169087 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 842EF2322F78555900169087 /* Assets.xcassets */; };
+		842EF2392F78574F00169087 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 842EF2382F78574F00169087 /* LaunchScreen.storyboard */; };
+		842EF23B2F7B110A00169087 /* WaitTimeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842EF23A2F7B110A00169087 /* WaitTimeModels.swift */; };
+		842EF23D2F7DEE3600169087 /* FacilityIssueModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842EF23C2F7DEE3600169087 /* FacilityIssueModels.swift */; };
+		842EF23F2F7DEE4200169087 /* FacilityIssueReportViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842EF23E2F7DEE4200169087 /* FacilityIssueReportViewController.swift */; };
+		84E8E9D22F7E996E00968025 /* CareCentersListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E8E9D12F7E996E00968025 /* CareCentersListViewController.swift */; };
+		84E8E9D42F7F14D000968025 /* AdminWaitTimeOverride.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E8E9D32F7F14D000968025 /* AdminWaitTimeOverride.swift */; };
+		84E8E9D62F7F14D200968025 /* AdminFacilityIssueOverride.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E8E9D52F7F14D200968025 /* AdminFacilityIssueOverride.swift */; };
 		CA69F3872F2A87D70059BC8A /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = CA69F3802F2A87D70059BC8A /* Main.storyboard */; };
 		CA69F3882F2A87D70059BC8A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA69F37A2F2A87D70059BC8A /* AppDelegate.swift */; };
 		CA69F3892F2A87D70059BC8A /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA69F3812F2A87D70059BC8A /* SceneDelegate.swift */; };
@@ -27,13 +33,19 @@
 
 /* Begin PBXFileReference section */
 		460624B9BDA0A19080D81033 /* Pods-HospitalApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-HospitalApp.debug.xcconfig"; path = "Target Support Files/Pods-HospitalApp/Pods-HospitalApp.debug.xcconfig"; sourceTree = "<group>"; };
+		842EF2322F78555900169087 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		842EF2382F78574F00169087 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		842EF23A2F7B110A00169087 /* WaitTimeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitTimeModels.swift; sourceTree = "<group>"; };
+		842EF23C2F7DEE3600169087 /* FacilityIssueModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacilityIssueModels.swift; sourceTree = "<group>"; };
+		842EF23E2F7DEE4200169087 /* FacilityIssueReportViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacilityIssueReportViewController.swift; sourceTree = "<group>"; };
+		84E8E9D12F7E996E00968025 /* CareCentersListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CareCentersListViewController.swift; sourceTree = "<group>"; };
+		84E8E9D32F7F14D000968025 /* AdminWaitTimeOverride.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminWaitTimeOverride.swift; sourceTree = "<group>"; };
+		84E8E9D52F7F14D200968025 /* AdminFacilityIssueOverride.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminFacilityIssueOverride.swift; sourceTree = "<group>"; };
 		B4D26AC1F474E52F717D1FEE /* Pods-HospitalApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-HospitalApp.release.xcconfig"; path = "Target Support Files/Pods-HospitalApp/Pods-HospitalApp.release.xcconfig"; sourceTree = "<group>"; };
 		B84F42C2C782624660F28218 /* Pods_HospitalApp.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_HospitalApp.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA69F3622F2A87AE0059BC8A /* HospitalApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HospitalApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA69F37A2F2A87D70059BC8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		CA69F37B2F2A87D70059BC8A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		CA69F37C2F2A87D70059BC8A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		CA69F37D2F2A87D70059BC8A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		CA69F37F2F2A87D70059BC8A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		CA69F3812F2A87D70059BC8A /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		CA69F3822F2A87D70059BC8A /* LandingPageViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandingPageViewController.swift; sourceTree = "<group>"; };
@@ -90,16 +102,16 @@
 		CA69F3832F2A87D70059BC8A /* HospitalApp */ = {
 			isa = PBXGroup;
 			children = (
+				842EF2322F78555900169087 /* Assets.xcassets */,
 				CA69F37A2F2A87D70059BC8A /* AppDelegate.swift */,
-				CA69F37B2F2A87D70059BC8A /* Assets.xcassets */,
 				CA69F37C2F2A87D70059BC8A /* Info.plist */,
-				CA69F37E2F2A87D70059BC8A /* LaunchScreen.storyboard */,
 				CA69F3802F2A87D70059BC8A /* Main.storyboard */,
 				CA69F3812F2A87D70059BC8A /* SceneDelegate.swift */,
 				CAC7B7D82F2A88B30003A5F6 /* GoogleService-Info.plist */,
 				CA7E375C2F2D3FB800AB625C /* Model */,
-				CA7E375E2F2D3FDB00AB625C /* Views */,
 				CA7E375D2F2D3FC700AB625C /* Controllers */,
+				842EF2382F78574F00169087 /* LaunchScreen.storyboard */,
+				842EF23A2F7B110A00169087 /* WaitTimeModels.swift */,
 			);
 			path = HospitalApp;
 			sourceTree = "<group>";
@@ -123,15 +135,13 @@
 				CA6F02082F2D49610044A3E0 /* CareCenterTableViewCell.swift */,
 				CA6F020A2F2D4DED0044A3E0 /* CareCenterAnnotation.swift */,
 				CA6F020C2F2D577B0044A3E0 /* CareCenterDetailHeaderCell.swift */,
+				842EF23C2F7DEE3600169087 /* FacilityIssueModels.swift */,
+				842EF23E2F7DEE4200169087 /* FacilityIssueReportViewController.swift */,
+				84E8E9D12F7E996E00968025 /* CareCentersListViewController.swift */,
+				84E8E9D32F7F14D000968025 /* AdminWaitTimeOverride.swift */,
+				84E8E9D52F7F14D200968025 /* AdminFacilityIssueOverride.swift */,
 			);
 			path = Controllers;
-			sourceTree = "<group>";
-		};
-		CA7E375E2F2D3FDB00AB625C /* Views */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Views;
 			sourceTree = "<group>";
 		};
 		F87550FEDFB853FF190AA22A /* Frameworks */ = {
@@ -202,9 +212,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CA69F3842F2A87D70059BC8A /* Assets.xcassets in Resources */,
 				CAC7B7D92F2A88B30003A5F6 /* GoogleService-Info.plist in Resources */,
-				CA69F3862F2A87D70059BC8A /* LaunchScreen.storyboard in Resources */,
+				842EF2332F78555900169087 /* Assets.xcassets in Resources */,
+				842EF2392F78574F00169087 /* LaunchScreen.storyboard in Resources */,
 				CA69F3872F2A87D70059BC8A /* Main.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -265,28 +275,26 @@
 				CA69F3882F2A87D70059BC8A /* AppDelegate.swift in Sources */,
 				CA7E37602F2D3FE900AB625C /* DataManager.swift in Sources */,
 				CA69F3892F2A87D70059BC8A /* SceneDelegate.swift in Sources */,
+				84E8E9D42F7F14D000968025 /* AdminWaitTimeOverride.swift in Sources */,
 				CAC7B7DD2F2BD3820003A5F6 /* CareCenterDetailsViewController.swift in Sources */,
 				CA6F020B2F2D4DED0044A3E0 /* CareCenterAnnotation.swift in Sources */,
 				CAC7B7DB2F2BD3790003A5F6 /* CareCenterListViewController.swift in Sources */,
+				84E8E9D22F7E996E00968025 /* CareCentersListViewController.swift in Sources */,
 				CA7E375B2F2BF9CA00AB625C /* CareCenter.swift in Sources */,
 				CA69F38A2F2A87D70059BC8A /* LandingPageViewController.swift in Sources */,
 				CA7E37592F2BF9C700AB625C /* Capability.swift in Sources */,
 				CA6F020D2F2D577B0044A3E0 /* CareCenterDetailHeaderCell.swift in Sources */,
 				CA6F02092F2D49610044A3E0 /* CareCenterTableViewCell.swift in Sources */,
+				842EF23D2F7DEE3600169087 /* FacilityIssueModels.swift in Sources */,
+				842EF23B2F7B110A00169087 /* WaitTimeModels.swift in Sources */,
+				84E8E9D62F7F14D200968025 /* AdminFacilityIssueOverride.swift in Sources */,
+				842EF23F2F7DEE4200169087 /* FacilityIssueReportViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXVariantGroup section */
-		CA69F37E2F2A87D70059BC8A /* LaunchScreen.storyboard */ = {
-			isa = PBXVariantGroup;
-			children = (
-				CA69F37D2F2A87D70059BC8A /* Base */,
-			);
-			name = LaunchScreen.storyboard;
-			sourceTree = "<group>";
-		};
 		CA69F3802F2A87D70059BC8A /* Main.storyboard */ = {
 			isa = PBXVariantGroup;
 			children = (
@@ -304,12 +312,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 42956HRKGT;
+				DEVELOPMENT_TEAM = N7N835YY8L;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = HospitalApp/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Care Compass";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -338,12 +348,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 42956HRKGT;
+				DEVELOPMENT_TEAM = N7N835YY8L;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = HospitalApp/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Care Compass";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;

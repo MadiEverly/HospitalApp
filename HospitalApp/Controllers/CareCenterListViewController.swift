@@ -6,6 +6,7 @@
 
 import UIKit
 import CoreLocation
+import MapKit
 
 extension Notification.Name {
     static let careCentersDidChange = Notification.Name("careCentersDidChange")
@@ -17,22 +18,26 @@ class CareCenterListViewController: UIViewController {
     var filterCapability: Capability?
     var onCareCenterSelected: ((CareCenter) -> Void)?
     private var careCenters: [CareCenter] = []
-    private var careCentersWithDistance: [(careCenter: CareCenter, distance: Double?)] = []
+    // Keep parallel model that carries ETA for sorting
+    private var careCentersWithETA: [(careCenter: CareCenter, eta: TimeInterval?)] = []
     private let tableView = UITableView()
-    private let locationManager = CLLocationManager()
-    private var currentLocation: CLLocation?
     private let headerView = UIView()
     private let headerLabel = UILabel()
     private var careCentersObserver: NSObjectProtocol?
-    
+
+    // ETA support
+    private let locationManager = CLLocationManager()
+    private var currentLocation: CLLocation?
+    private var etaCache: [UUID: TimeInterval] = [:]
+    private var etaRequestsInFlight: Set<UUID> = []
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Do any additional setup after loading the view.
         self.view.backgroundColor = .systemBackground
         
-        setupLocationManager()
         setupHeaderView()
         setupTableView()
+        setupLocationManager()
         
         // If a filter capability was passed, use it to filter the care centers
         if let capability = filterCapability {
@@ -49,6 +54,12 @@ class CareCenterListViewController: UIViewController {
             } else {
                 self.loadAllCareCenters()
             }
+            // Clear ETAs on dataset change
+            self.etaCache.removeAll()
+            self.etaRequestsInFlight.removeAll()
+            self.rebuildETAModelAndResort()
+            self.tableView.reloadData()
+            self.requestETAsForAllIfPossible()
         }
     }
     
@@ -60,23 +71,6 @@ class CareCenterListViewController: UIViewController {
     
     // MARK: - Setup
     
-    private func setupLocationManager() {
-        locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        
-        // Get current location if authorized
-        let status: CLAuthorizationStatus
-        if #available(iOS 14.0, *) {
-            status = locationManager.authorizationStatus
-        } else {
-            status = CLLocationManager.authorizationStatus()
-        }
-        
-        if status == .authorizedWhenInUse || status == .authorizedAlways {
-            locationManager.startUpdatingLocation()
-        }
-    }
-    
     private func setupHeaderView() {
         headerView.translatesAutoresizingMaskIntoConstraints = false
         headerView.backgroundColor = .systemBackground
@@ -84,7 +78,6 @@ class CareCenterListViewController: UIViewController {
         
         // Configure header label
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
-        // Show capability name if filtering, otherwise show "All Care Centers"
         headerLabel.text = filterCapability?.name ?? "All Care Centers"
         headerLabel.font = UIFont.systemFont(ofSize: 28, weight: .bold)
         headerLabel.textColor = .label
@@ -137,43 +130,106 @@ class CareCenterListViewController: UIViewController {
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
     }
+
+    private func setupLocationManager() {
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+
+        let status: CLAuthorizationStatus
+        if #available(iOS 14.0, *) {
+            status = locationManager.authorizationStatus
+        } else {
+            status = CLLocationManager.authorizationStatus()
+        }
+
+        switch status {
+        case .notDetermined:
+            locationManager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            locationManager.startUpdatingLocation()
+        default:
+            break
+        }
+    }
     
     // MARK: - Data Loading
     
     private func loadAllCareCenters() {
         careCenters = DataManager.shared.readAll()
-        sortCareCentersByDistance()
+        rebuildETAModelAndResort()
         tableView.reloadData()
+        requestETAsForAllIfPossible()
         print("Loaded \(careCenters.count) care centers")
     }
     
     private func loadFilteredCareCenters(by capability: Capability) {
         careCenters = DataManager.shared.filter(byCapability: capability)
-        sortCareCentersByDistance()
+        rebuildETAModelAndResort()
         tableView.reloadData()
+        requestETAsForAllIfPossible()
         print("Filtered by \(capability.name): \(careCenters.count) care centers")
     }
     
-    private func sortCareCentersByDistance() {
-        guard let userLocation = currentLocation else {
-            // No location available, just show care centers without distance sorting
-            careCentersWithDistance = careCenters.map { ($0, nil) }
-            return
-        }
-        
-        // Calculate distances and sort
-        careCentersWithDistance = careCenters.map { careCenter in
-            let careCenterLocation = CLLocation(latitude: careCenter.latitude, longitude: careCenter.longitude)
-            let distance = userLocation.distance(from: careCenterLocation)
-            return (careCenter, distance)
-        }
-        
-        // Sort by distance (ascending)
-        careCentersWithDistance.sort { lhs, rhs in
-            guard let lhsDistance = lhs.distance, let rhsDistance = rhs.distance else {
+    private func rebuildETAModelAndResort() {
+        careCentersWithETA = careCenters.map { ($0, etaCache[$0.id]) }
+        sortByETAAscending()
+    }
+    
+    private func sortByETAAscending() {
+        // Sort: non-nil ETA ascending first; nil ETAs sink; stable among nils using original order
+        careCentersWithETA.sort { lhs, rhs in
+            switch (lhs.eta, rhs.eta) {
+            case let (l?, r?):
+                if l != r { return l < r }
+                // tie-breaker by name for deterministic order
+                return lhs.careCenter.name < rhs.careCenter.name
+            case (nil, nil):
+                let lIndex = careCenters.firstIndex(where: { $0.id == lhs.careCenter.id }) ?? 0
+                let rIndex = careCenters.firstIndex(where: { $0.id == rhs.careCenter.id }) ?? 0
+                return lIndex < rIndex
+            case (nil, _?):
                 return false
+            case (_?, nil):
+                return true
             }
-            return lhsDistance < rhsDistance
+        }
+    }
+    
+    // MARK: - ETA
+    private func requestETAsForAllIfPossible() {
+        guard currentLocation != nil else { return }
+        for item in careCentersWithETA {
+            requestETAIfNeeded(for: item.careCenter)
+        }
+    }
+
+    private func requestETAIfNeeded(for center: CareCenter) {
+        guard etaCache[center.id] == nil,
+              !etaRequestsInFlight.contains(center.id),
+              let origin = currentLocation?.coordinate else { return }
+
+        etaRequestsInFlight.insert(center.id)
+
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude)))
+        request.transportType = .automobile
+        request.requestsAlternateRoutes = false
+
+        let directions = MKDirections(request: request)
+        directions.calculateETA { [weak self] response, _ in
+            guard let self = self else { return }
+            self.etaRequestsInFlight.remove(center.id)
+            if let eta = response?.expectedTravelTime, eta > 0 {
+                self.etaCache[center.id] = eta
+                // Update model entry
+                if let idx = self.careCentersWithETA.firstIndex(where: { $0.careCenter.id == center.id }) {
+                    self.careCentersWithETA[idx].eta = eta
+                }
+                // Resort by ETA and reload
+                self.sortByETAAscending()
+                self.tableView.reloadData()
+            }
         }
     }
     
@@ -182,8 +238,6 @@ class CareCenterListViewController: UIViewController {
     private func showCareCenter(_ careCenter: CareCenter) {
         // Dismiss this sheet first, then let the presenting view controller handle the details
         dismiss(animated: true) { [weak self] in
-            // Notify the landing page that a care center was selected
-            // The landing page will handle presenting the details
             self?.presentDetailsFromParent(careCenter)
         }
     }
@@ -203,6 +257,7 @@ class CareCenterListViewController: UIViewController {
         
         // Set the care center data
         detailsVC.careCenter = careCenter
+        // No need to pass userCoordinate here; details VC can compute ETA if needed
         
         // Present as a page sheet at medium height
         detailsVC.modalPresentationStyle = .pageSheet
@@ -223,17 +278,29 @@ class CareCenterListViewController: UIViewController {
 
 extension CareCenterListViewController: UITableViewDataSource {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return careCentersWithDistance.count
+        return careCentersWithETA.count
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+
         guard let cell = tableView.dequeueReusableCell(withIdentifier: CareCenterTableViewCell.reuseIdentifier, for: indexPath) as? CareCenterTableViewCell else {
             return UITableViewCell()
         }
         
-        let item = careCentersWithDistance[indexPath.row]
-        cell.configure(with: item.careCenter, distance: item.distance)
+        let item = careCentersWithETA[indexPath.row]
+        let center = item.careCenter
+        cell.configure(with: center, distance: nil)
+        cell.setDisplayStyle(.directionsButton)
+
+        // Apply travel ETA if cached
+        if let eta = etaCache[center.id] {
+            cell.setTravelTime(seconds: Int(eta))
+        } else {
+            // Trigger request; pill will show "No ETA" until filled
+            requestETAIfNeeded(for: center)
+        }
         
+        // Wait pill will update from DataManager notifications automatically; nothing else needed here
         return cell
     }
 }
@@ -243,7 +310,7 @@ extension CareCenterListViewController: UITableViewDataSource {
 extension CareCenterListViewController: UITableViewDelegate {
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let careCenter = careCentersWithDistance[indexPath.row].careCenter
+        let careCenter = careCentersWithETA[indexPath.row].careCenter
         
         // Notify the landing page to zoom to this care center
         onCareCenterSelected?(careCenter)
@@ -256,19 +323,27 @@ extension CareCenterListViewController: UITableViewDelegate {
 // MARK: - CLLocationManagerDelegate
 
 extension CareCenterListViewController: CLLocationManagerDelegate {
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        switch status {
+        case .authorizedWhenInUse, .authorizedAlways:
+            manager.startUpdatingLocation()
+        default:
+            break
+        }
+    }
+
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         currentLocation = location
-        
-        // Re-sort and reload when we get location
-        sortCareCentersByDistance()
+        requestETAsForAllIfPossible()
+        // Resort if any ETAs already present
+        sortByETAAscending()
         tableView.reloadData()
-        
-        // Stop updating to save battery
-        locationManager.stopUpdatingLocation()
+        manager.stopUpdatingLocation()
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("Location error: \(error.localizedDescription)")
+        // Handle location errors if needed
+        print("Location error (singular list): \(error.localizedDescription)")
     }
 }

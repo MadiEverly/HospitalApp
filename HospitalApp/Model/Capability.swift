@@ -9,3 +9,4 @@ public struct Capability: Identifiable, Hashable, Codable {
         self.name = name
     }
 }
+

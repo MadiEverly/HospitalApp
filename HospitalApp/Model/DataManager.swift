@@ -7,6 +7,7 @@
 
 import Foundation
 import FirebaseFirestore
+import FirebaseInstallations
 
 final class DataManager {
     
@@ -17,13 +18,43 @@ final class DataManager {
     
     // MARK: - Properties
     private(set) var careCenters: [CareCenter] = []
-    
+
+    // Wait time stats cache (in-memory)
+    private var waitStatsCache: [UUID: CareCenterWaitStats] = [:]
+    private var lastStatsFetchAt: [UUID: Date] = [:]
+    private let rateLimitKey = "waitTimeRateLimit"
+    private let statsLookbackHours: Int = 4
+    private let minStatsRefetchInterval: TimeInterval = 60 // 1 minute
+
+    // Facility issues cache
+    private var issuesCache: [UUID: [FacilityIssue]] = [:]
+    private var lastIssuesFetchAt: [UUID: Date] = [:]
+    private let minIssuesRefetchInterval: TimeInterval = 30 // seconds
+    private let facilityRateLimitKey = "facilityIssueRateLimit"
+
+    // Purge throttling
+    private let lastFacilityPurgeKey = "lastFacilityIssuesPurgeAt"
+    private let minPurgeInterval: TimeInterval = 60 * 60 // 1 hour
+
+    // MARK: - Admin Overrides
+
+    private var adminWaitOverrides: [UUID: AdminWaitTimeOverride] = [:]
+    private var adminFacilityOverrides: [UUID: AdminFacilityIssueOverride] = [:]
+
+    private var adminWaitListener: ListenerRegistration?
+    private var adminFacilityListener: ListenerRegistration?
+
+    private var hasStartedAdminListeners = false
+
     // MARK: - Initialization
     private init() {
         // Attempt to load from Firestore first; fall back to local cache
         Task { [weak self] in
             await self?.loadFromFirestore()
             self?.startCareCentersListener()
+            self?.startAdminOverrideListenersIfNeeded()
+            // Opportunistic purge on startup, throttled
+            await self?.purgeStaleUnverifiedFacilityIssuesIfNeeded()
         }
     }
     
@@ -46,6 +77,10 @@ final class DataManager {
                     let json = try JSONSerialization.data(withJSONObject: data, options: [])
                     return try JSONDecoder().decode(CareCenter.self, from: json)
                 }
+
+                // Ingest embedded manual wait time fields from care center docs (waitTimeMinutes / waitTime)
+                self.ingestEmbeddedAdminWaitOverrides(from: snapshot)
+
                 DispatchQueue.main.async {
                     self.careCenters = centers
                     self.saveCareCenters()
@@ -57,8 +92,90 @@ final class DataManager {
         }
     }
 
+    private func startAdminOverrideListenersIfNeeded() {
+        guard !hasStartedAdminListeners else { return }
+        hasStartedAdminListeners = true
+
+        // Wait time overrides (whole collection listener; small scale)
+        adminWaitListener?.remove()
+        adminWaitListener = db.collection("adminWaitTimeOverrides").addSnapshotListener { [weak self] snap, err in
+            guard let self else { return }
+            if let err { print("Admin wait override listener error: \(err)"); return }
+            guard let snap else { return }
+            var changedIDs: Set<UUID> = []
+            for diff in snap.documentChanges {
+                let doc = diff.document
+                let data = doc.data()
+                switch diff.type {
+                case .added, .modified:
+                    if let model = AdminWaitTimeOverride.fromFirestore(data, docID: doc.documentID) {
+                        self.adminWaitOverrides[model.careCenterID] = model
+                        changedIDs.insert(model.careCenterID)
+                        // Invalidate derived effective cache
+                        self.waitStatsCache[model.careCenterID] = CareCenterWaitStats(careCenterID: model.careCenterID, averageMinutes: model.minutes, reportsCount: 0, lastUpdated: model.updatedAt)
+                    }
+                case .removed:
+                    // Use docID as fallback
+                    if let id = UUID(uuidString: doc.documentID) {
+                        self.adminWaitOverrides[id] = nil
+                        changedIDs.insert(id)
+                        // Invalidate effective cache; crowd stats will be used next fetch
+                        self.waitStatsCache[id] = nil
+                        self.lastStatsFetchAt[id] = nil
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                for centerID in changedIDs {
+                    NotificationCenter.default.post(name: .adminWaitOverrideDidChange, object: centerID, userInfo: ["override": self.adminWaitOverrides[centerID] as Any])
+                    // Also emit waitStatsDidChange for consumers that only listen to stats
+                    if let eff = self.cachedEffectiveWaitStats(for: centerID) {
+                        NotificationCenter.default.post(name: .waitStatsDidChange, object: centerID, userInfo: ["stats": eff])
+                    } else if let cached = self.waitStatsCache[centerID] {
+                        NotificationCenter.default.post(name: .waitStatsDidChange, object: centerID, userInfo: ["stats": cached])
+                    }
+                }
+            }
+        }
+
+        // Facility issue overrides
+        adminFacilityListener?.remove()
+        adminFacilityListener = db.collection("adminFacilityIssueOverrides").addSnapshotListener { [weak self] snap, err in
+            guard let self else { return }
+            if let err { print("Admin facility override listener error: \(err)"); return }
+            guard let snap else { return }
+            var changedIDs: Set<UUID> = []
+            for diff in snap.documentChanges {
+                let doc = diff.document
+                let data = doc.data()
+                switch diff.type {
+                case .added, .modified:
+                    if let model = AdminFacilityIssueOverride.fromFirestore(data, docID: doc.documentID) {
+                        self.adminFacilityOverrides[model.careCenterID] = model
+                        changedIDs.insert(model.careCenterID)
+                    }
+                case .removed:
+                    if let id = UUID(uuidString: doc.documentID) {
+                        self.adminFacilityOverrides[id] = nil
+                        changedIDs.insert(id)
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                for centerID in changedIDs {
+                    NotificationCenter.default.post(name: .adminFacilityOverrideDidChange, object: centerID, userInfo: ["override": self.adminFacilityOverrides[centerID] as Any])
+                    // Also emit facilityIssuesDidChange so UIs that only observe issues update
+                    let effective = self.cachedEffectiveFacilityIssues(for: centerID) ?? []
+                    NotificationCenter.default.post(name: .facilityIssuesDidChange, object: centerID, userInfo: ["issues": effective])
+                }
+            }
+        }
+    }
+
     deinit {
         careCentersListener?.remove()
+        adminWaitListener?.remove()
+        adminFacilityListener?.remove()
     }
 
     /// Load care centers from Firestore and update local cache
@@ -73,6 +190,10 @@ final class DataManager {
                 let json = try JSONSerialization.data(withJSONObject: data, options: [])
                 return try JSONDecoder().decode(CareCenter.self, from: json)
             }
+
+            // Ingest embedded manual wait fields from care center docs
+            ingestEmbeddedAdminWaitOverrides(from: snapshot)
+
             self.careCenters = centers
             saveCareCenters() // update local cache
             NotificationCenter.default.post(name: Notification.Name.careCentersDidChange, object: nil, userInfo: nil)
@@ -220,10 +341,15 @@ final class DataManager {
         return careCenters.filter { $0.name.localizedCaseInsensitiveContains(name) }
     }
     
-    /// Filter care centers by capability
+    /// Filter care centers by capability (match by capability name, case/whitespace-insensitive)
     func filter(byCapability capability: Capability) -> [CareCenter] {
-        return careCenters.filter { $0.capabilities.contains(capability) }
-    }
+        let target = capability.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return careCenters.filter { center in
+            center.capabilities.contains {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == target
+            }
+        }
+        }
     
     /// Filter care centers within a distance (in meters) from a location
     func filter(nearLatitude latitude: Double, longitude: Double, within distance: Double) -> [CareCenter] {
@@ -238,19 +364,371 @@ final class DataManager {
         }
     }
     
-    /// Get all unique capabilities from all care centers, sorted alphabetically by name
+    /// Get unique capabilities across all care centers, deduped by name (case/whitespace-insensitive) and sorted by name.
     func getAllCapabilities() -> [Capability] {
-        var capabilitiesSet = Set<Capability>()
-        
-        for careCenter in careCenters {
-            for capability in careCenter.capabilities {
-                capabilitiesSet.insert(capability)
+        var byName: [String: Capability] = [:] // key: normalized name
+        for center in careCenters {
+            for cap in center.capabilities {
+                let key = cap.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if byName[key] == nil {
+                    byName[key] = cap
+                }
             }
         }
-        
-        return capabilitiesSet.sorted { $0.name < $1.name }
+        return byName.values.sorted { $0.name < $1.name }
     }
     
+    // MARK: - Wait Time Reports & Stats
+
+    private var waitReportsCollection: CollectionReference {
+        db.collection("waitTimeReports")
+    }
+
+    /// Returns a stable anonymous userID. Prefer Firebase Installations; fallback to local UUID.
+    func anonymousUserID() async -> String {
+        // Try cached
+        if let cached = UserDefaults.standard.string(forKey: "anonymousUserID") {
+            return cached
+        }
+        // Try Firebase Installations
+        if let id = try? await Installations.installations().installationID() {
+            UserDefaults.standard.set(id, forKey: "anonymousUserID")
+            return id
+        }
+        // Fallback
+        let local = UUID().uuidString
+        UserDefaults.standard.set(local, forKey: "anonymousUserID")
+        return local
+    }
+
+    /// Client-side rate limit: 1 report per user per care center per hour.
+    private func canSubmitReport(userID: String, careCenterID: UUID) -> Bool {
+        let key = "\(rateLimitKey).\(userID).\(careCenterID.uuidString)"
+        if let last = UserDefaults.standard.object(forKey: key) as? Date {
+            if Date().timeIntervalSince(last) < 3600 {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func recordReportSubmission(userID: String, careCenterID: UUID) {
+        let key = "\(rateLimitKey).\(userID).\(careCenterID.uuidString)"
+        UserDefaults.standard.set(Date(), forKey: key)
+    }
+
+    /// Submit a wait time report if allowed by rate limit.
+    func submitWaitTime(careCenterID: UUID, minutes: Int) async throws {
+        let userID = await anonymousUserID()
+        guard canSubmitReport(userID: userID, careCenterID: careCenterID) else {
+            throw NSError(domain: "WaitTime", code: 429, userInfo: [NSLocalizedDescriptionKey: "You can submit one report per hour for this location."])
+        }
+
+        let report = WaitTimeReport(careCenterID: careCenterID, userID: userID, minutes: minutes, createdAt: Date())
+        try await waitReportsCollection.document(report.id.uuidString).setData(report.firestoreData, merge: false)
+
+        // Record locally for rate limiting
+        recordReportSubmission(userID: userID, careCenterID: careCenterID)
+
+        // Invalidate cache and refetch stats for this care center
+        waitStatsCache[careCenterID] = nil
+        lastStatsFetchAt[careCenterID] = nil
+        // Fire a stats refresh
+        _ = try? await fetchWaitStats(careCenterID: careCenterID, force: true)
+    }
+
+    /// Fetch average wait stats over the last 4 hours (crowd only; ignores admin override).
+    /// Caches results briefly to avoid excessive reads.
+    func fetchWaitStats(careCenterID: UUID, force: Bool = false) async throws -> CareCenterWaitStats {
+        // If an admin override exists, synthesize stats and return immediately.
+        if let override = adminWaitOverrides[careCenterID] {
+            let stats = CareCenterWaitStats(careCenterID: careCenterID, averageMinutes: override.minutes, reportsCount: 0, lastUpdated: override.updatedAt)
+            waitStatsCache[careCenterID] = stats
+            lastStatsFetchAt[careCenterID] = Date()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .waitStatsDidChange, object: careCenterID, userInfo: ["stats": stats])
+            }
+            return stats
+        }
+
+        if !force,
+           let last = lastStatsFetchAt[careCenterID],
+           Date().timeIntervalSince(last) < minStatsRefetchInterval,
+           let cached = waitStatsCache[careCenterID] {
+            return cached
+        }
+
+        let earliest = Calendar.current.date(byAdding: .hour, value: -statsLookbackHours, to: Date()) ?? Date().addingTimeInterval(-4 * 3600)
+
+        let query = waitReportsCollection
+            .whereField("careCenterID", isEqualTo: careCenterID.uuidString)
+            .whereField("createdAt", isGreaterThan: earliest)
+            .order(by: "createdAt", descending: true)
+
+        let snapshot = try await query.getDocuments()
+        let reports: [WaitTimeReport] = snapshot.documents.compactMap { doc in
+            let data = doc.data()
+            guard let idStr = data["id"] as? String,
+                  let id = UUID(uuidString: idStr),
+                  let careIDStr = data["careCenterID"] as? String,
+                  let careID = UUID(uuidString: careIDStr),
+                  let userID = data["userID"] as? String,
+                  let minutes = data["minutes"] as? Int,
+                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? data["createdAt"] as? Date
+            else { return nil }
+            return WaitTimeReport(id: id, careCenterID: careID, userID: userID, minutes: minutes, createdAt: createdAt)
+        }
+
+        let count = reports.count
+        let avg = count > 0 ? Int((reports.map { Double($0.minutes) }.reduce(0, +) / Double(count)).rounded()) : 0
+        let stats = CareCenterWaitStats(careCenterID: careCenterID, averageMinutes: avg, reportsCount: count, lastUpdated: Date())
+
+        waitStatsCache[careCenterID] = stats
+        lastStatsFetchAt[careCenterID] = Date()
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .waitStatsDidChange, object: careCenterID, userInfo: ["stats": stats])
+        }
+
+        return stats
+    }
+
+    /// Effective stats: prefer admin override if present, otherwise crowd stats (cached or fetched).
+    func effectiveWaitStats(careCenterID: UUID, force: Bool = false) async -> CareCenterWaitStats {
+        if let override = adminWaitOverrides[careCenterID] {
+            let stats = CareCenterWaitStats(careCenterID: careCenterID, averageMinutes: override.minutes, reportsCount: 0, lastUpdated: override.updatedAt)
+            waitStatsCache[careCenterID] = stats
+            lastStatsFetchAt[careCenterID] = Date()
+            return stats
+        }
+        // Fall back to cached or fetch
+        if let cached = waitStatsCache[careCenterID], !force {
+            return cached
+        }
+        if let fetched = try? await fetchWaitStats(careCenterID: careCenterID, force: force) {
+            return fetched
+        }
+        return CareCenterWaitStats(careCenterID: careCenterID, averageMinutes: 0, reportsCount: 0, lastUpdated: Date.distantPast)
+    }
+
+    /// Convenience accessor for cached effective stats (admin override if present; else cached crowd)
+    func cachedEffectiveWaitStats(for careCenterID: UUID) -> CareCenterWaitStats? {
+        if let override = adminWaitOverrides[careCenterID] {
+            return CareCenterWaitStats(careCenterID: careCenterID, averageMinutes: override.minutes, reportsCount: 0, lastUpdated: override.updatedAt)
+        }
+        return waitStatsCache[careCenterID]
+    }
+
+    // MARK: - Facility Issues
+
+    private var facilityIssuesCollection: CollectionReference { db.collection("facilityIssues") }
+    private var facilityIssueReportsCollection: CollectionReference { db.collection("facilityIssueReports") }
+
+    private func canSubmitFacilityIssue(userID: String, careCenterID: UUID) -> Bool {
+        let key = "\(facilityRateLimitKey).\(userID).\(careCenterID.uuidString)"
+        if let last = UserDefaults.standard.object(forKey: key) as? Date {
+            if Date().timeIntervalSince(last) < 3600 {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func recordFacilityIssueSubmission(userID: String, careCenterID: UUID) {
+        let key = "\(facilityRateLimitKey).\(userID).\(careCenterID.uuidString)"
+        UserDefaults.standard.set(Date(), forKey: key)
+    }
+
+    func submitFacilityIssue(careCenterID: UUID, category: FacilityIssueCategory, details: String?) async throws {
+        let userID = await anonymousUserID()
+        guard canSubmitFacilityIssue(userID: userID, careCenterID: careCenterID) else {
+            throw NSError(domain: "FacilityIssue", code: 429, userInfo: [NSLocalizedDescriptionKey: "You can submit one facility issue report per hour for this location."])
+        }
+
+        let detailsKey = (details ?? "").normalizedKey()
+        // aggregation key: careCenterID + category + detailsKey
+        // Query for existing aggregated issue
+        let query = facilityIssuesCollection
+            .whereField("careCenterID", isEqualTo: careCenterID.uuidString)
+            .whereField("category", isEqualTo: category.rawValue)
+            .whereField("detailsKey", isEqualTo: detailsKey)
+
+        let snapshot = try await query.limit(to: 1).getDocuments()
+
+        var issue: FacilityIssue
+        if let doc = snapshot.documents.first, let parsed = FacilityIssue.fromFirestore(doc.data()) {
+            issue = parsed
+            // increment reportsCount
+            issue.reportsCount += 1
+            issue.lastUpdated = Date()
+            // keep details if newly provided and absent
+            if (issue.details == nil || issue.details?.isEmpty == true), let d = details, !d.isEmpty {
+                issue.details = d
+            }
+            try await facilityIssuesCollection.document(issue.id.uuidString).setData(issue.firestoreData, merge: true)
+        } else {
+            // create new aggregated issue
+            issue = FacilityIssue(careCenterID: careCenterID, category: category, detailsKey: detailsKey, details: details, reportsCount: 1, isVerified: false, lastUpdated: Date())
+            try await facilityIssuesCollection.document(issue.id.uuidString).setData(issue.firestoreData, merge: false)
+        }
+
+        // Write raw report
+        let raw = FacilityIssueReport(issueID: issue.id, careCenterID: careCenterID, userID: userID, category: category, detailsKey: detailsKey, details: details, createdAt: Date())
+        try await facilityIssueReportsCollection.document(raw.id.uuidString).setData(raw.firestoreData, merge: false)
+
+        // Update cache
+        var arr = issuesCache[careCenterID] ?? []
+        if let idx = arr.firstIndex(where: { $0.id == issue.id }) {
+            arr[idx] = issue
+        } else {
+            arr.append(issue)
+        }
+        issuesCache[careCenterID] = arr
+        lastIssuesFetchAt[careCenterID] = Date()
+
+        recordFacilityIssueSubmission(userID: userID, careCenterID: careCenterID)
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .facilityIssuesDidChange, object: careCenterID, userInfo: ["issues": arr])
+        }
+    }
+
+    func fetchFacilityIssues(careCenterID: UUID, force: Bool = false) async throws -> [FacilityIssue] {
+        if !force,
+           let last = lastIssuesFetchAt[careCenterID],
+           Date().timeIntervalSince(last) < minIssuesRefetchInterval,
+           let cached = issuesCache[careCenterID] {
+            return cached
+        }
+        let snapshot = try await facilityIssuesCollection
+            .whereField("careCenterID", isEqualTo: careCenterID.uuidString)
+            .getDocuments()
+
+        let issues: [FacilityIssue] = snapshot.documents.compactMap { FacilityIssue.fromFirestore($0.data()) }
+            .sorted { lhs, rhs in
+                // Verified first, then by lastUpdated desc
+                if lhs.isVerified != rhs.isVerified { return lhs.isVerified && !rhs.isVerified }
+                return lhs.lastUpdated > rhs.lastUpdated
+            }
+
+        issuesCache[careCenterID] = issues
+        lastIssuesFetchAt[careCenterID] = Date()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .facilityIssuesDidChange, object: careCenterID, userInfo: ["issues": issues])
+        }
+        return issues
+    }
+
+    func cachedFacilityIssues(for careCenterID: UUID) -> [FacilityIssue]? {
+        return issuesCache[careCenterID]
+    }
+
+    // Admin verification toggle (call from a privileged UI or tool)
+    func setFacilityIssueVerified(issueID: UUID, isVerified: Bool) async throws {
+        let ref = facilityIssuesCollection.document(issueID.uuidString)
+        try await ref.setData(["isVerified": isVerified, "lastUpdated": Date()], merge: true)
+
+        // Update caches and notify for any care center that had this issue
+        let doc = try await ref.getDocument()
+        if let data = doc.data(), let updated = FacilityIssue.fromFirestore(data) {
+            var arr = issuesCache[updated.careCenterID] ?? []
+            if let idx = arr.firstIndex(where: { $0.id == updated.id }) {
+                arr[idx] = updated
+            }
+            issuesCache[updated.careCenterID] = arr
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .facilityIssuesDidChange, object: updated.careCenterID, userInfo: ["issues": arr])
+            }
+        }
+    }
+
+    // MARK: - Effective Facility Issues (admin + crowd)
+
+    /// Returns the effective set of facility issues for display.
+    /// If an admin override exists, an "Admin Notice" should be displayed on top of the normal crowd issues.
+    func effectiveFacilityIssues(careCenterID: UUID, force: Bool = false) async -> [FacilityIssue] {
+        // We keep the crowd issues as-is; the admin notice is handled in the UI with a separate model.
+        if !force, let cached = issuesCache[careCenterID] {
+            return cached
+        }
+        if let fetched = try? await fetchFacilityIssues(careCenterID: careCenterID, force: force) {
+            return fetched
+        }
+        return []
+    }
+
+    /// Convenience accessor for cached effective list (crowd only; admin notice handled in UI).
+    func cachedEffectiveFacilityIssues(for careCenterID: UUID) -> [FacilityIssue]? {
+        return issuesCache[careCenterID]
+    }
+
+    // MARK: - Purge stale unverified facility issues
+
+    /// Throttled wrapper to avoid excessive reads.
+    func purgeStaleUnverifiedFacilityIssuesIfNeeded() async {
+        let now = Date()
+        if let last = UserDefaults.standard.object(forKey: lastFacilityPurgeKey) as? Date,
+           now.timeIntervalSince(last) < minPurgeInterval {
+            return
+        }
+        await purgeStaleUnverifiedFacilityIssues(olderThan: 24 * 3600)
+        UserDefaults.standard.set(now, forKey: lastFacilityPurgeKey)
+    }
+
+    /// Deletes unverified FacilityIssue documents older than the given age (seconds) and their reports.
+    func purgeStaleUnverifiedFacilityIssues(olderThan ageSeconds: TimeInterval) async {
+        let cutoff = Date().addingTimeInterval(-ageSeconds)
+        do {
+            // Query unverified issues older than cutoff
+            let query = facilityIssuesCollection
+                .whereField("isVerified", isEqualTo: false)
+                .whereField("lastUpdated", isLessThanOrEqualTo: cutoff)
+
+            let snapshot = try await query.getDocuments()
+            guard !snapshot.documents.isEmpty else { return }
+
+            // Group affected care centers for cache/notification updates
+            var affectedCenters: Set<UUID> = []
+
+            for doc in snapshot.documents {
+                let data = doc.data()
+                guard let issue = FacilityIssue.fromFirestore(data) else {
+                    // If parsing fails, still attempt to delete the doc to avoid leaks
+                    try await doc.reference.delete()
+                    continue
+                }
+                affectedCenters.insert(issue.careCenterID)
+
+                // Delete all raw reports for this issue
+                let reportsSnap = try await facilityIssueReportsCollection
+                    .whereField("issueID", isEqualTo: issue.id.uuidString)
+                    .getDocuments()
+                for r in reportsSnap.documents {
+                    try await r.reference.delete()
+                }
+
+                // Delete the aggregate issue
+                try await facilityIssuesCollection.document(issue.id.uuidString).delete()
+
+                // Remove from in-memory cache
+                if var list = issuesCache[issue.careCenterID] {
+                    list.removeAll { $0.id == issue.id }
+                    issuesCache[issue.careCenterID] = list
+                }
+            }
+
+            // Notify UI for each affected care center
+            DispatchQueue.main.async {
+                for centerID in affectedCenters {
+                    let current = self.issuesCache[centerID] ?? []
+                    NotificationCenter.default.post(name: .facilityIssuesDidChange, object: centerID, userInfo: ["issues": current])
+                }
+            }
+        } catch {
+            print("Error purging stale unverified facility issues: \(error)")
+        }
+    }
+
     // MARK: - Persistence
     
     private var careCentersURL: URL {
@@ -435,5 +913,71 @@ final class DataManager {
         
         return earthRadius * c
     }
-}
 
+    // MARK: - Embedded Admin Wait Override ingestion
+
+    /// Reads optional waitTimeMinutes / waitTime fields embedded on care center documents
+    /// and updates the effective wait stats + notifications.
+    private func ingestEmbeddedAdminWaitOverrides(from snapshot: QuerySnapshot) {
+        var changedIDs: Set<UUID> = []
+
+        for doc in snapshot.documents {
+            let data = doc.data()
+            // Resolve the care center ID from docID or explicit field
+            let idStr = (data["id"] as? String) ?? doc.documentID
+            guard let centerID = UUID(uuidString: idStr) else { continue }
+
+            // Prefer explicit integer minutes
+            var minutes: Int? = data["waitTimeMinutes"] as? Int
+
+            // Fallback: parse "waitTime" if present (accept Int, Double, or String with digits)
+            if minutes == nil {
+                if let v = data["waitTime"] {
+                    if let i = v as? Int { minutes = i }
+                    else if let d = v as? Double { minutes = Int(d.rounded()) }
+                    else if let s = v as? String {
+                        let digits = s.filter { $0.isNumber }
+                        if let parsed = Int(digits) { minutes = parsed }
+                    }
+                }
+            }
+
+            // Optional metadata: if your web app later adds waitTimeUpdatedAt, we’ll use it
+            let updatedAt: Date = {
+                if let d = data["waitTimeUpdatedAt"] as? Date { return d }
+                if let ts = data["waitTimeUpdatedAt"] as? Timestamp { return ts.dateValue() }
+                return Date()
+            }()
+
+            if let m = minutes, m > 0 {
+                let newOverride = AdminWaitTimeOverride(careCenterID: centerID, minutes: m, reason: nil, updatedAt: updatedAt, updatedBy: nil)
+                if adminWaitOverrides[centerID] != newOverride {
+                    adminWaitOverrides[centerID] = newOverride
+                    // Synthesize effective stats and cache them
+                    waitStatsCache[centerID] = CareCenterWaitStats(careCenterID: centerID, averageMinutes: m, reportsCount: 0, lastUpdated: updatedAt)
+                    lastStatsFetchAt[centerID] = Date()
+                    changedIDs.insert(centerID)
+                }
+            } else {
+                // No override or <= 0 -> clear any existing override
+                if adminWaitOverrides[centerID] != nil {
+                    adminWaitOverrides[centerID] = nil
+                    waitStatsCache[centerID] = nil
+                    lastStatsFetchAt[centerID] = nil
+                    changedIDs.insert(centerID)
+                }
+            }
+        }
+
+        if !changedIDs.isEmpty {
+            DispatchQueue.main.async {
+                for centerID in changedIDs {
+                    NotificationCenter.default.post(name: .adminWaitOverrideDidChange, object: centerID, userInfo: ["override": self.adminWaitOverrides[centerID] as Any])
+                    if let eff = self.cachedEffectiveWaitStats(for: centerID) {
+                        NotificationCenter.default.post(name: .waitStatsDidChange, object: centerID, userInfo: ["stats": eff])
+                    }
+                }
+            }
+        }
+    }
+}

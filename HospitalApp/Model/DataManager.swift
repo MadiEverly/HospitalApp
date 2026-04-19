@@ -8,6 +8,7 @@
 import Foundation
 import FirebaseFirestore
 import FirebaseInstallations
+import FirebaseAuth
 
 final class DataManager {
     
@@ -384,21 +385,43 @@ final class DataManager {
         db.collection("waitTimeReports")
     }
 
-    /// Returns a stable anonymous userID. Prefer Firebase Installations; fallback to local UUID.
+    /// Returns a stable anonymous userID. Prefer Firebase Auth UID; fallback to Firebase Installations; then local UUID.
     func anonymousUserID() async -> String {
-        // Try cached
-        if let cached = UserDefaults.standard.string(forKey: "anonymousUserID") {
-            return cached
+        // Prefer Auth uid
+        if let uid = Auth.auth().currentUser?.uid {
+            return uid
         }
-        // Try Firebase Installations
+        // Try to sign in anonymously if not already
+        if Auth.auth().currentUser == nil {
+            if let result = try? await Auth.auth().signInAnonymously() {
+                return result.user.uid
+            }
+        }
+        // Try Firebase Installations as a stable ID fallback
         if let id = try? await Installations.installations().installationID() {
             UserDefaults.standard.set(id, forKey: "anonymousUserID")
             return id
         }
-        // Fallback
+        // Last resort: local UUID
+        if let cached = UserDefaults.standard.string(forKey: "anonymousUserID") {
+            return cached
+        }
         let local = UUID().uuidString
         UserDefaults.standard.set(local, forKey: "anonymousUserID")
         return local
+    }
+
+    /// Require a real Firebase Auth user (anonymous is OK). Throws if sign-in fails.
+    private func requireAuthUID() async throws -> String {
+        if let uid = Auth.auth().currentUser?.uid {
+            return uid
+        }
+        do {
+            let result = try await Auth.auth().signInAnonymously()
+            return result.user.uid
+        } catch {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Could not authenticate. Please try again."])
+        }
     }
 
     /// Client-side rate limit: 1 report per user per care center per hour.
@@ -419,13 +442,18 @@ final class DataManager {
 
     /// Submit a wait time report if allowed by rate limit.
     func submitWaitTime(careCenterID: UUID, minutes: Int) async throws {
-        let userID = await anonymousUserID()
+        // Ensure we are authenticated (anonymous is fine)
+        let userID = try await requireAuthUID()
         guard canSubmitReport(userID: userID, careCenterID: careCenterID) else {
             throw NSError(domain: "WaitTime", code: 429, userInfo: [NSLocalizedDescriptionKey: "You can submit one report per hour for this location."])
         }
 
         let report = WaitTimeReport(careCenterID: careCenterID, userID: userID, minutes: minutes, createdAt: Date())
-        try await waitReportsCollection.document(report.id.uuidString).setData(report.firestoreData, merge: false)
+        var data = report.firestoreData
+        // Enforce server timestamp so rules can validate createdAt == request.time
+        data["createdAt"] = FieldValue.serverTimestamp()
+
+        try await waitReportsCollection.document(report.id.uuidString).setData(data, merge: false)
 
         // Record locally for rate limiting
         recordReportSubmission(userID: userID, careCenterID: careCenterID)
@@ -540,7 +568,8 @@ final class DataManager {
     }
 
     func submitFacilityIssue(careCenterID: UUID, category: FacilityIssueCategory, details: String?) async throws {
-        let userID = await anonymousUserID()
+        // Ensure we are authenticated (anonymous is fine)
+        let userID = try await requireAuthUID()
         guard canSubmitFacilityIssue(userID: userID, careCenterID: careCenterID) else {
             throw NSError(domain: "FacilityIssue", code: 429, userInfo: [NSLocalizedDescriptionKey: "You can submit one facility issue report per hour for this location."])
         }
@@ -558,23 +587,36 @@ final class DataManager {
         var issue: FacilityIssue
         if let doc = snapshot.documents.first, let parsed = FacilityIssue.fromFirestore(doc.data()) {
             issue = parsed
-            // increment reportsCount
+
+            // Build an atomic update: +1 reportsCount, server timestamp, and set details if missing and provided.
+            var update: [String: Any] = [
+                "reportsCount": FieldValue.increment(Int64(1)),
+                "lastUpdated": FieldValue.serverTimestamp()
+            ]
+            if (issue.details == nil || issue.details?.isEmpty == true), let d = details, !d.isEmpty {
+                update["details"] = d
+            }
+            try await facilityIssuesCollection.document(issue.id.uuidString).setData(update, merge: true)
+
+            // Mirror the updated fields locally
             issue.reportsCount += 1
             issue.lastUpdated = Date()
-            // keep details if newly provided and absent
             if (issue.details == nil || issue.details?.isEmpty == true), let d = details, !d.isEmpty {
                 issue.details = d
             }
-            try await facilityIssuesCollection.document(issue.id.uuidString).setData(issue.firestoreData, merge: true)
         } else {
-            // create new aggregated issue
+            // create new aggregated issue (lastUpdated via serverTimestamp)
             issue = FacilityIssue(careCenterID: careCenterID, category: category, detailsKey: detailsKey, details: details, reportsCount: 1, isVerified: false, lastUpdated: Date())
-            try await facilityIssuesCollection.document(issue.id.uuidString).setData(issue.firestoreData, merge: false)
+            var data = issue.firestoreData
+            data["lastUpdated"] = FieldValue.serverTimestamp()
+            try await facilityIssuesCollection.document(issue.id.uuidString).setData(data, merge: false)
         }
 
-        // Write raw report
+        // Write raw report (createdAt via serverTimestamp)
         let raw = FacilityIssueReport(issueID: issue.id, careCenterID: careCenterID, userID: userID, category: category, detailsKey: detailsKey, details: details, createdAt: Date())
-        try await facilityIssueReportsCollection.document(raw.id.uuidString).setData(raw.firestoreData, merge: false)
+        var rawData = raw.firestoreData
+        rawData["createdAt"] = FieldValue.serverTimestamp()
+        try await facilityIssueReportsCollection.document(raw.id.uuidString).setData(rawData, merge: false)
 
         // Update cache
         var arr = issuesCache[careCenterID] ?? []
@@ -981,3 +1023,4 @@ final class DataManager {
         }
     }
 }
+

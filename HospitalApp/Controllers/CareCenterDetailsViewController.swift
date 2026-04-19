@@ -349,7 +349,7 @@ class CareCenterDetailsViewController: UIViewController {
         let alert = UIAlertController(title: "Report wait time", message: nil, preferredStyle: .alert)
 
         // Embed custom content in a child view controller (supported way)
-        let contentVC = SliderContentViewController(initialValue: 30, min: 0, max: 180)
+        let contentVC = SliderContentViewController(initialValue: 30, min: 0, max: 600)
         alert.setValue(contentVC, forKey: "contentViewController")
 
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
@@ -495,7 +495,7 @@ private final class SliderContentViewController: UIViewController, UITextFieldDe
         valueLabel.textAlignment = .left
         valueLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
         valueLabel.textColor = .secondaryLabel
-        valueLabel.text = "\(currentValue) min"
+        valueLabel.text = formatHoursMinutes(currentValue)
 
         // Numeric input
         minuteField.translatesAutoresizingMaskIntoConstraints = false
@@ -539,6 +539,22 @@ private final class SliderContentViewController: UIViewController, UITextFieldDe
         ])
     }
 
+    // Format minutes as "x hours y minutes" with simple pluralization and zero handling
+    private func formatHoursMinutes(_ minutes: Int) -> String {
+        let clamped = max(0, minutes)
+        let hours = clamped / 60
+        let mins = clamped % 60
+
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours) hour" + (hours == 1 ? "" : "s"))
+        }
+        if mins > 0 || hours == 0 {
+            parts.append("\(mins) minute" + (mins == 1 ? "" : "s"))
+        }
+        return parts.joined(separator: " ")
+    }
+
     @objc private func sliderChanged(_ sender: UISlider) {
         let rounded = Int(round(sender.value))
         applyNewValue(rounded, source: .slider)
@@ -568,11 +584,11 @@ private final class SliderContentViewController: UIViewController, UITextFieldDe
 
     private func applyNewValue(_ newValue: Int, source: ChangeSource) {
         guard newValue != currentValue else {
-            valueLabel.text = "\(currentValue) min"
+            valueLabel.text = formatHoursMinutes(currentValue)
             return
         }
         currentValue = newValue
-        valueLabel.text = "\(currentValue) min"
+        valueLabel.text = formatHoursMinutes(currentValue)
 
         switch source {
         case .slider:
@@ -715,3 +731,4 @@ extension CareCenterDetailsViewController: CLLocationManagerDelegate {
         calculateETA(from: loc, to: CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude))
     }
 }
+

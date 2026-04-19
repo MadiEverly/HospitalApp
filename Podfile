@@ -9,6 +9,7 @@ target 'HospitalApp' do
   pod 'Firebase'
   pod 'FirebaseAnalytics'
   pod 'FirebaseFirestore'
+  pod 'FirebaseAuth'
 
 
 end

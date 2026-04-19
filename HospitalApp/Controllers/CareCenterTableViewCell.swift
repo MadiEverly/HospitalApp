@@ -69,6 +69,9 @@ class CareCenterTableViewCell: UITableViewCell {
     // When true, render times as "x hrs y min" instead of "H:MM".
     private var prefersLongTimeFormat = false
 
+    // Travel pill icon (configurable per controller; defaults to car)
+    private var travelPillIconSystemName: String = "car.fill"
+
     // MARK: - Initialization
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -333,6 +336,13 @@ class CareCenterTableViewCell: UITableViewCell {
         updateTravelPill(seconds: travelTimeSeconds)
     }
     
+    // Allow controller to choose the travel pill icon (e.g., route symbol)
+    func setTravelPillIcon(systemName: String) {
+        travelPillIconSystemName = systemName
+        // Re-render pill with current value
+        updateTravelPill(seconds: travelTimeSeconds)
+    }
+    
     // MARK: - Configuration
     func configure(with careCenter: CareCenter, distance: Double?) {
         currentCareCenterID = careCenter.id
@@ -508,13 +518,13 @@ class CareCenterTableViewCell: UITableViewCell {
         let bgColor: UIColor = .systemGray5
 
         guard let secs = seconds, secs > 0 else {
-            travelPill.attributedText = pillText(iconSystemName: "car.fill", text: "No ETA", textColor: textColor)
+            travelPill.attributedText = pillText(iconSystemName: travelPillIconSystemName, text: "No ETA", textColor: textColor)
             travelPill.backgroundColor = bgColor
             return
         }
         let mins = max(1, Int(round(Double(secs) / 60.0)))
         let text = formatHoursMinutesLong(fromMinutes: mins)
-        travelPill.attributedText = pillText(iconSystemName: "car.fill", text: text, textColor: textColor)
+        travelPill.attributedText = pillText(iconSystemName: travelPillIconSystemName, text: text, textColor: textColor)
         travelPill.backgroundColor = bgColor
     }
 
@@ -564,6 +574,8 @@ class CareCenterTableViewCell: UITableViewCell {
         // Reset to default style for safety (plural controller expectation)
         displayStyle = .timing
         prefersLongTimeFormat = false
+        // Reset travel pill icon to default for other controllers
+        travelPillIconSystemName = "car.fill"
         applyDisplayStyle()
     }
     

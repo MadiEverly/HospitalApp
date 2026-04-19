@@ -292,6 +292,9 @@ extension CareCenterListViewController: UITableViewDataSource {
         cell.configure(with: center, distance: nil)
         cell.setDisplayStyle(.directionsButton)
 
+        // Use a route-style SF Symbol for the travel (directions) pill in this controller
+        cell.setTravelPillIcon(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+
         // Apply travel ETA if cached
         if let eta = etaCache[center.id] {
             cell.setTravelTime(seconds: Int(eta))
@@ -347,3 +350,4 @@ extension CareCenterListViewController: CLLocationManagerDelegate {
         print("Location error (singular list): \(error.localizedDescription)")
     }
 }
+
